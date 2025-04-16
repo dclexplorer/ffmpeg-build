@@ -1,0 +1,149 @@
+name: Build static FFmpeg for multiple platforms
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  build-linux:
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v3
+      - name: Install dependencies
+        run: sudo apt-get update && sudo apt-get install -y yasm pkg-config build-essential curl
+      - name: Download FFmpeg
+        run: |
+          FF_VERSION=6.1
+          curl -L https://ffmpeg.org/releases/ffmpeg-$FF_VERSION.tar.gz | tar xz
+          mv ffmpeg-$FF_VERSION ffmpeg
+      - name: Configure & Build
+        run: |
+          cd ffmpeg
+          ./configure --prefix=$PWD/build --disable-shared --enable-static --disable-debug --disable-doc --enable-pic
+          make -j$(nproc)
+          make install
+      - name: Upload artifact
+        uses: actions/upload-artifact@v3
+        with:
+          name: ffmpeg-linux-x86_64
+          path: ffmpeg/build
+
+  build-macos-arm64:
+    runs-on: macos-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v3
+      - name: Install dependencies
+        run: brew install yasm pkg-config
+      - name: Download FFmpeg
+        run: |
+          FF_VERSION=6.1
+          curl -L https://ffmpeg.org/releases/ffmpeg-$FF_VERSION.tar.gz | tar xz
+          mv ffmpeg-$FF_VERSION ffmpeg
+      - name: Configure & Build
+        run: |
+          cd ffmpeg
+          ./configure --prefix=$PWD/build --disable-shared --enable-static --disable-debug --disable-doc --enable-pic --arch=arm64 --cpu=apple-a14
+          make -j$(sysctl -n hw.ncpu)
+          make install
+      - name: Upload artifact
+        uses: actions/upload-artifact@v3
+        with:
+          name: ffmpeg-macos-arm64
+          path: ffmpeg/build
+
+  build-ios-arm64:
+    runs-on: macos-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v3
+      - name: Setup iOS SDK
+        run: |
+          export DEVELOPER=$(xcode-select -print-path)
+          export SDKROOT=$(xcrun --sdk iphoneos --show-sdk-path)
+          export CC=$(xcrun --sdk iphoneos -f clang)
+          export CFLAGS="-arch arm64 -isysroot $SDKROOT"
+          export LDFLAGS="-arch arm64 -isysroot $SDKROOT"
+      - name: Download FFmpeg
+        run: |
+          FF_VERSION=6.1
+          curl -L https://ffmpeg.org/releases/ffmpeg-$FF_VERSION.tar.gz | tar xz
+          mv ffmpeg-$FF_VERSION ffmpeg
+      - name: Configure & Build for iOS
+        run: |
+          cd ffmpeg
+          ./configure --prefix=$PWD/build-ios --disable-shared --enable-static --disable-debug --disable-doc --enable-pic --target-os=darwin --arch=arm64 --cc="$CC" --sysroot="$SDKROOT" --extra-cflags="$CFLAGS" --extra-ldflags="$LDFLAGS"
+          make -j$(sysctl -n hw.ncpu)
+          make install
+      - name: Upload artifact
+        uses: actions/upload-artifact@v3
+        with:
+          name: ffmpeg-ios-arm64
+          path: ffmpeg/build-ios
+
+  build-android-arm64:
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v3
+      - name: Setup Android NDK
+        uses: android-actions/setup-ndk@v2
+        with:
+          ndk-version: '25.1.8937393'
+      - name: Download FFmpeg
+        run: |
+          FF_VERSION=6.1
+          curl -L https://ffmpeg.org/releases/ffmpeg-$FF_VERSION.tar.gz | tar xz
+          mv ffmpeg-$FF_VERSION ffmpeg
+      - name: Configure & Build for Android
+        run: |
+          export NDK=$ANDROID_NDK_HOME
+          export TOOLCHAIN=$NDK/toolchains/llvm/prebuilt/linux-x86_64
+          export TARGET=aarch64-linux-android
+          export API=21
+          cd ffmpeg
+          ./configure --prefix=$PWD/build-android \
+            --disable-shared --enable-static --disable-debug --disable-doc --enable-pic \
+            --arch=aarch64 --target-os=android \
+            --cross-prefix=$TOOLCHAIN/bin/$TARGET$API- \
+            --sysroot=$TOOLCHAIN/sysroot
+          make -j$(nproc)
+          make install
+      - name: Upload artifact
+        uses: actions/upload-artifact@v3
+        with:
+          name: ffmpeg-android-arm64
+          path: ffmpeg/build-android
+
+  build-windows-x86_64:
+    runs-on: windows-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v3
+      - name: Install MSYS2 and dependencies
+        uses: msys2/setup-msys2@v2
+        with:
+          update: true
+          install: >-
+            mingw-w64-x86_64-gcc
+            mingw-w64-x86_64-yasm
+            mingw-w64-x86_64-pkg-config
+      - name: Configure & Build for Windows
+        shell: bash
+        run: |
+          export PATH="/c/msys64/mingw64/bin:$PATH"
+          FF_VERSION=6.1
+          curl -L https://ffmpeg.org/releases/ffmpeg-$FF_VERSION.tar.gz | tar xz
+          mv ffmpeg-$FF_VERSION ffmpeg
+          cd ffmpeg
+          ./configure --prefix=$PWD/build --cross-prefix=x86_64-w64-mingw32- --target-os=mingw32 --arch=x86_64 --disable-shared --enable-static --disable-debug --disable-doc --enable-pic
+          make -j$(nproc)
+          make install
+          cd build
+          zip -r ffmpeg-windows-x86_64.zip .
+      - name: Upload artifact
+        uses: actions/upload-artifact@v3
+        with:
+          name: ffmpeg-windows-x86_64
+          path: ffmpeg/build/ffmpeg-windows-x86_64.zip
