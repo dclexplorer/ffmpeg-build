@@ -1,4 +1,4 @@
-name: Build static FFmpeg for multiple platforms
+name: Build shared FFmpeg for multiple platforms
 on:
   push:
     branches: [main]
@@ -9,7 +9,7 @@ jobs:
     runs-on: ubuntu-latest
     continue-on-error: true
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
       - name: Install dependencies
         run: sudo apt-get update && sudo apt-get install -y yasm pkg-config build-essential curl
       - name: Download FFmpeg
@@ -20,11 +20,11 @@ jobs:
       - name: Configure & Build
         run: |
           cd ffmpeg
-          ./configure --prefix=$PWD/build --disable-shared --enable-static --disable-debug --disable-doc --enable-pic
+          ./configure --prefix=$PWD/build --enable-shared --disable-static --disable-debug --disable-doc --disable-programs
           make -j$(nproc)
           make install
       - name: Upload artifact
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: ffmpeg-linux-x86_64
           path: ffmpeg/build
@@ -33,7 +33,7 @@ jobs:
     runs-on: macos-latest
     continue-on-error: true
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
       - name: Install dependencies
         run: brew install yasm pkg-config
       - name: Download FFmpeg
@@ -44,11 +44,11 @@ jobs:
       - name: Configure & Build
         run: |
           cd ffmpeg
-          ./configure --prefix=$PWD/build --disable-shared --enable-static --disable-debug --disable-doc --enable-pic --arch=arm64 --cpu=apple-a14
+          ./configure --prefix=$PWD/build --enable-shared --disable-static --disable-debug --disable-doc --disable-programs --arch=arm64 --cpu=apple-a14
           make -j$(sysctl -n hw.ncpu)
           make install
       - name: Upload artifact
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: ffmpeg-macos-arm64
           path: ffmpeg/build
@@ -57,7 +57,7 @@ jobs:
     runs-on: macos-latest
     continue-on-error: true
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
       - name: Setup iOS SDK
         run: |
           export DEVELOPER=$(xcode-select -print-path)
@@ -73,11 +73,11 @@ jobs:
       - name: Configure & Build for iOS
         run: |
           cd ffmpeg
-          ./configure --prefix=$PWD/build-ios --disable-shared --enable-static --disable-debug --disable-doc --enable-pic --target-os=darwin --arch=arm64 --cc="$CC" --sysroot="$SDKROOT" --extra-cflags="$CFLAGS" --extra-ldflags="$LDFLAGS"
+          ./configure --prefix=$PWD/build-ios --enable-shared --disable-static --disable-debug --disable-doc --disable-programs --target-os=darwin --arch=arm64 --cc="$CC" --sysroot="$SDKROOT" --extra-cflags="$CFLAGS" --extra-ldflags="$LDFLAGS"
           make -j$(sysctl -n hw.ncpu)
           make install
       - name: Upload artifact
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: ffmpeg-ios-arm64
           path: ffmpeg/build-ios
@@ -86,32 +86,69 @@ jobs:
     runs-on: ubuntu-latest
     continue-on-error: true
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
       - name: Setup Android NDK
-        uses: android-actions/setup-ndk@v2
+        uses: nttld/setup-ndk@v1
         with:
-          ndk-version: '25.1.8937393'
+          ndk-version: r27c
       - name: Download FFmpeg
         run: |
           FF_VERSION=6.1
           curl -L https://ffmpeg.org/releases/ffmpeg-$FF_VERSION.tar.gz | tar xz
-          mv ffmpeg-$FF_VERSION ffmpeg
+          mv ffmpeg-$FF_VERSION ffmpeg        
       - name: Configure & Build for Android
         run: |
           export NDK=$ANDROID_NDK_HOME
           export TOOLCHAIN=$NDK/toolchains/llvm/prebuilt/linux-x86_64
           export TARGET=aarch64-linux-android
-          export API=21
+          export API=24
+          
+          export CC=$TOOLCHAIN/bin/${TARGET}${API}-clang
+          export CXX=$TOOLCHAIN/bin/${TARGET}${API}-clang++
+          export AR=$TOOLCHAIN/bin/llvm-ar
+          export NM=$TOOLCHAIN/bin/llvm-nm
+          export STRIP=$TOOLCHAIN/bin/llvm-strip
+          export RANLIB=$TOOLCHAIN/bin/llvm-ranlib
+          
+          export SYSROOT=$TOOLCHAIN/sysroot
+          export CFLAGS="-fPIC"
+          export LDFLAGS="-fPIC -fuse-ld=lld"
+          
           cd ffmpeg
-          ./configure --prefix=$PWD/build-android \
-            --disable-shared --enable-static --disable-debug --disable-doc --enable-pic \
-            --arch=aarch64 --target-os=android \
-            --cross-prefix=$TOOLCHAIN/bin/$TARGET$API- \
-            --sysroot=$TOOLCHAIN/sysroot
+          ./configure \
+            --prefix=$PWD/build-android \
+            --enable-cross-compile \
+            --target-os=android \
+            --arch=aarch64 \
+            --cross-prefix=$TOOLCHAIN/bin/${TARGET}- \
+            --sysroot=$SYSROOT \
+            --cc=$CC \
+            --cxx=$CXX \
+            --ar=$AR \
+            --nm=$NM \
+            --ranlib=$RANLIB \
+            --strip=$STRIP \
+            --enable-shared \
+            --disable-static \
+            --disable-debug \
+            --disable-doc \
+            --disable-programs \
+            --extra-cflags="$CFLAGS" \
+            --extra-ldflags="$LDFLAGS" \
+            --cpu=armv8-a
           make -j$(nproc)
           make install
+
+      - name: Upload config.log on failure
+        if: ${{ failure() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: ffbuild-config-log
+          path: ffmpeg/ffbuild/config.log
+  
+
       - name: Upload artifact
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: ffmpeg-android-arm64
           path: ffmpeg/build-android
@@ -120,30 +157,67 @@ jobs:
     runs-on: windows-latest
     continue-on-error: true
     steps:
-      - uses: actions/checkout@v3
-      - name: Install MSYS2 and dependencies
+      - uses: actions/checkout@v4
+
+      - name: Setup MSYS2 with required tools
         uses: msys2/setup-msys2@v2
         with:
+          msystem: MINGW64
           update: true
           install: >-
-            mingw-w64-x86_64-gcc
+            base-devel
+            mingw-w64-x86_64-toolchain
             mingw-w64-x86_64-yasm
+            mingw-w64-x86_64-nasm
             mingw-w64-x86_64-pkg-config
-      - name: Configure & Build for Windows
-        shell: bash
+            mingw-w64-x86_64-binutils
+            diffutils
+            make
+
+      - name: Create symlinks for missing tools
+        shell: msys2 {0}
         run: |
-          export PATH="/c/msys64/mingw64/bin:$PATH"
+          cd /mingw64/bin
+          ls -la
+          ln -s x86_64-w64-mingw32-gcc-nm.exe x86_64-w64-mingw32-nm.exe
+          ln -s x86_64-w64-mingw32-gcc-ar.exe x86_64-w64-mingw32-ar.exe
+          ln -s x86_64-w64-mingw32-gcc-ranlib.exe x86_64-w64-mingw32-ranlib.exe
+          ln -s strip.exe x86_64-w64-mingw32-strip.exe
+          ln -s dlltool.exe x86_64-w64-mingw32-dlltool.exe
+          ls -la x86_64-w64-mingw32-*.exe
+
+      - name: Build FFmpeg for Windows
+        shell: msys2 {0}
+        run: |
+          echo "PATH: $PATH"
+
           FF_VERSION=6.1
           curl -L https://ffmpeg.org/releases/ffmpeg-$FF_VERSION.tar.gz | tar xz
           mv ffmpeg-$FF_VERSION ffmpeg
           cd ffmpeg
-          ./configure --prefix=$PWD/build --cross-prefix=x86_64-w64-mingw32- --target-os=mingw32 --arch=x86_64 --disable-shared --enable-static --disable-debug --disable-doc --enable-pic
-          make -j$(nproc)
+
+          ./configure \
+            --prefix=$PWD/build \
+            --cross-prefix=x86_64-w64-mingw32- \
+            --target-os=mingw32 \
+            --arch=x86_64 \
+            --enable-shared \
+            --disable-avdevice \
+            --disable-static \
+            --disable-debug \
+            --disable-doc \
+            --disable-programs
+
+          echo "Make"
+          make -j$(nproc)          
+          echo "Make install"
           make install
-          cd build
-          zip -r ffmpeg-windows-x86_64.zip .
+          echo "Lss..."
+          ls -la
+          ls -la build/
+
       - name: Upload artifact
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: ffmpeg-windows-x86_64
-          path: ffmpeg/build/ffmpeg-windows-x86_64.zip
+          path: ffmpeg/build
