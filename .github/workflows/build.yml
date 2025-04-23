@@ -2,6 +2,7 @@ name: Build shared FFmpeg for multiple platforms
 on:
   push:
     branches: [main]
+    tags: ['*']
   workflow_dispatch:
 
 jobs:
